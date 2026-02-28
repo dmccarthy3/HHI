@@ -229,7 +229,7 @@ class Car {
   checkWaypoints() {
     const wp = WPS[this.nextWp];
     const d  = Math.hypot(wp.x - this.x, wp.y - this.y);
-    if (d < 55) {
+    if (d < 100) {
       // wpsPassed > 0 guards against a phantom lap: car id=0 spawns ~54px
       // from WP[0] (inside the 55px threshold), so the very first frame of
       // racing would fire this without the guard.  After that first free

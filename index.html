@@ -130,7 +130,10 @@ class Car {
     this.speed = 0;
 
     // Lap tracking via waypoints
-    this.nextWp        = 0;
+    // Start at WP 1 so crossing WP 0 always counts as a completed lap.
+    // (Cars start just ~54px from WP 0, inside the 55px threshold, so
+    // nextWp=0 would trigger an instant phantom lap on the very first frame.)
+    this.nextWp        = 1;
     this.wpsPassed     = 0;         // total waypoints crossed this race
     this.lap           = 0;
     this.finished      = false;

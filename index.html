@@ -130,10 +130,7 @@ class Car {
     this.speed = 0;
 
     // Lap tracking via waypoints
-    // Start at WP 1 so crossing WP 0 always counts as a completed lap.
-    // (Cars start just ~54px from WP 0, inside the 55px threshold, so
-    // nextWp=0 would trigger an instant phantom lap on the very first frame.)
-    this.nextWp        = 1;
+    this.nextWp        = 0;
     this.wpsPassed     = 0;         // total waypoints crossed this race
     this.lap           = 0;
     this.finished      = false;
@@ -233,7 +230,11 @@ class Car {
     const wp = WPS[this.nextWp];
     const d  = Math.hypot(wp.x - this.x, wp.y - this.y);
     if (d < 55) {
-      if (this.nextWp === 0) {
+      // wpsPassed > 0 guards against a phantom lap: car id=0 spawns ~54px
+      // from WP[0] (inside the 55px threshold), so the very first frame of
+      // racing would fire this without the guard.  After that first free
+      // crossing wpsPassed=1, so every subsequent WP[0] pass counts normally.
+      if (this.nextWp === 0 && this.wpsPassed > 0) {
         this.lap++;
         if (this.lap >= TOTAL_LAPS) {
           this.finished  = true;

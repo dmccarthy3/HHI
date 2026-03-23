@@ -14,6 +14,11 @@ IF "%~1"=="" (
     echo Searching for all PDFs in this folder instead...
     echo.
     python "%~dp0extract_scopes.py" --dir "%~dp0" --output "%~dp0scope_descriptions.html"
+) ELSE IF EXIST "%~1\" (
+    echo Folder detected: %~1
+    echo Searching for all PDFs in that folder...
+    echo.
+    python "%~dp0extract_scopes.py" --dir "%~1" --output "%~1\scope_descriptions.html"
 ) ELSE (
     echo Processing dragged files...
     echo.

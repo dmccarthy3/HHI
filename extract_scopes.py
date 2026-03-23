@@ -18,7 +18,8 @@ from datetime import datetime
 from pathlib import Path
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
-REQUEST_DELAY = 3   # seconds between API calls to stay under rate limits
+REQUEST_DELAY_TEXT = 5    # seconds after text-based extraction (~2k-8k tokens)
+REQUEST_DELAY_VISION = 25  # seconds after vision extraction (images cost ~3k tokens/page)
 MAX_RETRIES = 4     # retry attempts on rate limit errors
 
 
@@ -96,10 +97,10 @@ def extract_scope_via_vision(client: anthropic.Anthropic, pdf_path: str, filenam
     doc = fitz.open(pdf_path)
     content = []
 
-    max_pages = min(len(doc), 10)  # cap at 10 pages to manage token cost
+    max_pages = min(len(doc), 5)  # cap at 5 pages — scope is always near the front
     for page_num in range(max_pages):
         page = doc[page_num]
-        pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+        pix = page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0))  # 1x = ~3k tokens/page vs ~5k at 1.5x
         img_data = base64.standard_b64encode(pix.tobytes("png")).decode()
         content.append({
             "type": "image",
@@ -535,10 +536,10 @@ def main():
         if not pdf_text.strip():
             print(f"  Warning: No text extracted. Trying vision-based extraction...")
             scope = extract_scope_via_vision(client, pdf_path, filename, model=args.model)
+            time.sleep(REQUEST_DELAY_VISION)  # images are token-heavy
         else:
             scope = extract_scope_description(client, pdf_text, filename, model=args.model)
-
-        time.sleep(REQUEST_DELAY)  # stay under rate limits
+            time.sleep(REQUEST_DELAY_TEXT)
 
         if scope == "NO SCOPE DESCRIPTION FOUND":
             print(f"  Result: No scope description found.")

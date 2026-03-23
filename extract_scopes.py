@@ -8,12 +8,18 @@ and organizes them into a single HTML document.
 import os
 import sys
 import glob
+import time
+import base64
 import argparse
 import html
 import fitz  # PyMuPDF
 import anthropic
 from datetime import datetime
 from pathlib import Path
+
+DEFAULT_MODEL = "claude-sonnet-4-6"
+REQUEST_DELAY = 3   # seconds between API calls to stay under rate limits
+MAX_RETRIES = 4     # retry attempts on rate limit errors
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -31,7 +37,32 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     return "\n\n".join(text_parts)
 
 
-def extract_scope_description(client: anthropic.Anthropic, pdf_text: str, filename: str) -> str:
+def _call_with_retry(client, model, max_tokens, messages):
+    """Call the Claude API with exponential backoff on rate limit errors."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            with client.messages.stream(
+                model=model,
+                max_tokens=max_tokens,
+                messages=messages
+            ) as stream:
+                final = stream.get_final_message()
+            result = ""
+            for block in final.content:
+                if block.type == "text":
+                    result = block.text.strip()
+                    break
+            return result
+        except anthropic.RateLimitError:
+            if attempt < MAX_RETRIES - 1:
+                wait = 2 ** (attempt + 1)  # 2, 4, 8, 16 seconds
+                print(f"  Rate limit hit. Waiting {wait}s before retry ({attempt + 2}/{MAX_RETRIES})...")
+                time.sleep(wait)
+            else:
+                raise
+
+
+def extract_scope_description(client: anthropic.Anthropic, pdf_text: str, filename: str, model: str = DEFAULT_MODEL) -> str:
     """Use Claude to extract the Scope Description from PDF text."""
     print(f"  Extracting scope description from {filename}...")
 
@@ -55,21 +86,37 @@ Please extract ONLY the scope description content. If there are multiple scope-r
 - If no scope description is found, respond with exactly: "NO SCOPE DESCRIPTION FOUND"
 """
 
-    with client.messages.stream(
-        model="claude-opus-4-6",
-        max_tokens=4096,
-        thinking={"type": "adaptive"},
-        messages=[{"role": "user", "content": prompt}]
-    ) as stream:
-        final = stream.get_final_message()
+    result = _call_with_retry(client, model, 2048, [{"role": "user", "content": prompt}])
+    return result if result else "NO SCOPE DESCRIPTION FOUND"
 
-    # Extract text blocks (skip thinking blocks)
-    result = ""
-    for block in final.content:
-        if block.type == "text":
-            result = block.text.strip()
-            break
 
+def extract_scope_via_vision(client: anthropic.Anthropic, pdf_path: str, filename: str, model: str = DEFAULT_MODEL) -> str:
+    """Use Claude vision to extract scope from a scanned/image-only PDF."""
+    print(f"  Using vision extraction for scanned PDF: {filename}...")
+    doc = fitz.open(pdf_path)
+    content = []
+
+    max_pages = min(len(doc), 10)  # cap at 10 pages to manage token cost
+    for page_num in range(max_pages):
+        page = doc[page_num]
+        pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+        img_data = base64.standard_b64encode(pix.tobytes("png")).decode()
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": img_data}
+        })
+    doc.close()
+
+    content.append({
+        "type": "text",
+        "text": f"""You are reviewing a document called "{filename}". Find and extract the Scope Description (or Scope of Work) from these PDF page images.
+
+Look for sections labeled "Scope Description", "Scope of Work", "Scope", "Project Scope", "Work Scope", or similar.
+
+Extract ONLY the scope description content. If multiple scope sections exist, include all. Start directly with the content (no preamble). Preserve the original wording. If no scope description is found, respond with exactly: "NO SCOPE DESCRIPTION FOUND"."""
+    })
+
+    result = _call_with_retry(client, model, 2048, [{"role": "user", "content": content}])
     return result if result else "NO SCOPE DESCRIPTION FOUND"
 
 
@@ -418,6 +465,11 @@ def main():
         "--api-key",
         help="Anthropic API key (or set ANTHROPIC_API_KEY environment variable)."
     )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help=f"Claude model to use (default: {DEFAULT_MODEL})."
+    )
 
     args = parser.parse_args()
 
@@ -481,10 +533,12 @@ def main():
         pdf_text = extract_text_from_pdf(pdf_path)
 
         if not pdf_text.strip():
-            print(f"  Warning: No text extracted (may be a scanned/image PDF).")
-            scope = "NO SCOPE DESCRIPTION FOUND — Document appears to contain no extractable text (possibly a scanned image PDF)."
+            print(f"  Warning: No text extracted. Trying vision-based extraction...")
+            scope = extract_scope_via_vision(client, pdf_path, filename, model=args.model)
         else:
-            scope = extract_scope_description(client, pdf_text, filename)
+            scope = extract_scope_description(client, pdf_text, filename, model=args.model)
+
+        time.sleep(REQUEST_DELAY)  # stay under rate limits
 
         if scope == "NO SCOPE DESCRIPTION FOUND":
             print(f"  Result: No scope description found.")
